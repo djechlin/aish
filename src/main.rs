@@ -1,6 +1,8 @@
 use clap::{App, Arg, SubCommand};
 use std::error::Error;
 use std::env;
+use std::io::{self, Write};
+use std::process::Command;
 
 // Define structures for JSON serialization/deserialization
 #[derive(serde::Serialize)]
@@ -8,7 +10,6 @@ struct AnthropicRequest {
     model: String,
     max_tokens: u32,
     messages: Vec<Message>,
-    system: String,
 }
 
 #[derive(serde::Serialize)]
@@ -40,13 +41,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("aish")
         .version("0.1.0")
         .author("Daniel Echlin")
-        .about("Get shell commands using LLM")
+        .about("Call LLM from command line and get shell commands")
         .subcommand(
-            SubCommand::with_name("cmd")
-                .about("Get a shell command for your task")
+            SubCommand::with_name("ask")
+                .about("Ask Claude a question")
                 .arg(
-                    Arg::with_name("task")
-                        .help("Describe what you're trying to do")
+                    Arg::with_name("query")
+                        .help("The question to ask Claude")
                         .required(true)
                         .index(1),
                 ),
@@ -54,27 +55,48 @@ fn main() -> Result<(), Box<dyn Error>> {
         .get_matches();
 
     match matches.subcommand() {
-        Some(("cmd", cmd_matches)) => {
-            let task = cmd_matches.value_of("task").unwrap();
-            let response = get_shell_command(task)?;
-            println!("{}", response);
+        Some(("ask", ask_matches)) => {
+            let query = ask_matches.value_of("query").unwrap();
+            let response = call_claude(query)?;
+
+            // Display the command and wait for user confirmation
+            print!("{} ", response);
+            io::stdout().flush()?;
+
+            // Wait for user to press Enter
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+
+            // Execute the command if user pressed Enter without typing anything
+            if input.trim().is_empty() {
+                let output = if cfg!(target_os = "windows") {
+                    Command::new("cmd")
+                        .args(["/C", &response])
+                        .output()?
+                } else {
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg(&response)
+                        .output()?
+                };
+
+                io::stdout().write_all(&output.stdout)?;
+                io::stderr().write_all(&output.stderr)?;
+            }
+
             Ok(())
         }
         _ => {
-            println!("Try using the 'cmd' subcommand followed by your task");
-            println!("Example: aish cmd \"find all PDF files modified in the last week\"");
+            println!("Try using the 'ask' subcommand followed by your question");
             Ok(())
         }
     }
 }
 
-fn get_shell_command(task: &str) -> Result<String, Box<dyn Error>> {
+fn call_claude(query: &str) -> Result<String, Box<dyn Error>> {
     // Get API key from environment
     let api_key = env::var("ANTHROPIC_API_KEY")
         .expect("ANTHROPIC_API_KEY environment variable must be set");
-
-    // System prompt to ensure we get just the shell command
-    let system_prompt = "You are a helpful shell command assistant. The user will describe a task they want to accomplish using the command line. Your task is to provide ONLY the shell command that would accomplish this task, with no explanation or additional text. Provide the most efficient and accurate command for their use case. Do not include any markdown formatting, just the raw command itself.";
 
     // Prepare the request
     let client = reqwest::blocking::Client::new();
@@ -82,21 +104,19 @@ fn get_shell_command(task: &str) -> Result<String, Box<dyn Error>> {
     let request = AnthropicRequest {
         model: "claude-3-7-sonnet-20250219".to_string(),
         max_tokens: 1000,
-        system: system_prompt.to_string(),
         messages: vec![
             Message {
                 role: "user".to_string(),
                 content: vec![
                     ContentItem {
                         content_type: "text".to_string(),
-                        text: format!("I want a shell command to: {}", task),
+                        text: format!("Generate a shell command to accomplish the following task. Output ONLY the command, no explanation: {}", query),
                     },
                 ],
             },
         ],
     };
 
-    // Make the API call
     let response = client
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", api_key)
@@ -114,17 +134,9 @@ fn get_shell_command(task: &str) -> Result<String, Box<dyn Error>> {
         .filter(|content| content.content_type == "text")
         .map(|content| content.text.clone())
         .collect::<Vec<String>>()
-        .join("\n");
-
-    // Clean the response - trim whitespace, remove any markdown code blocks if present
-    let clean_response = response_text
+        .join("\n")
         .trim()
-        .replace("```bash\n", "")
-        .replace("```sh\n", "")
-        .replace("```shell\n", "")
-        .replace("```\n", "")
-        .replace("\n```", "")
-        .replace("```", "");
+        .to_string();
 
-    Ok(clean_response)
+    Ok(response_text)
 }
