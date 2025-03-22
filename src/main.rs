@@ -8,6 +8,7 @@ struct AnthropicRequest {
     model: String,
     max_tokens: u32,
     messages: Vec<Message>,
+    system: String,
 }
 
 #[derive(serde::Serialize)]
@@ -39,13 +40,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("aish")
         .version("0.1.0")
         .author("Daniel Echlin")
-        .about("Call LLM from command line and get shell commands")
+        .about("Get shell commands using LLM")
         .subcommand(
-            SubCommand::with_name("ask")
-                .about("Ask Claude a question")
+            SubCommand::with_name("cmd")
+                .about("Get a shell command for your task")
                 .arg(
-                    Arg::with_name("query")
-                        .help("The question to ask Claude")
+                    Arg::with_name("task")
+                        .help("Describe what you're trying to do")
                         .required(true)
                         .index(1),
                 ),
@@ -53,25 +54,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         .get_matches();
 
     match matches.subcommand() {
-        Some(("ask", ask_matches)) => {
-            let query = ask_matches.value_of("query").unwrap();
-            let response = call_claude(query)?;
+        Some(("cmd", cmd_matches)) => {
+            let task = cmd_matches.value_of("task").unwrap();
+            let response = get_shell_command(task)?;
             println!("{}", response);
             Ok(())
         }
         _ => {
-            println!("Try using the 'ask' subcommand followed by your question");
+            println!("Try using the 'cmd' subcommand followed by your task");
+            println!("Example: aish cmd \"find all PDF files modified in the last week\"");
             Ok(())
         }
     }
 }
 
-fn call_claude(query: &str) -> Result<String, Box<dyn Error>> {
-    println!("Asking Claude: {}", query);
-
+fn get_shell_command(task: &str) -> Result<String, Box<dyn Error>> {
     // Get API key from environment
     let api_key = env::var("ANTHROPIC_API_KEY")
         .expect("ANTHROPIC_API_KEY environment variable must be set");
+
+    // System prompt to ensure we get just the shell command
+    let system_prompt = "You are a helpful shell command assistant. The user will describe a task they want to accomplish using the command line. Your task is to provide ONLY the shell command that would accomplish this task, with no explanation or additional text. Provide the most efficient and accurate command for their use case. Do not include any markdown formatting, just the raw command itself.";
 
     // Prepare the request
     let client = reqwest::blocking::Client::new();
@@ -79,13 +82,14 @@ fn call_claude(query: &str) -> Result<String, Box<dyn Error>> {
     let request = AnthropicRequest {
         model: "claude-3-7-sonnet-20250219".to_string(),
         max_tokens: 1000,
+        system: system_prompt.to_string(),
         messages: vec![
             Message {
                 role: "user".to_string(),
                 content: vec![
                     ContentItem {
                         content_type: "text".to_string(),
-                        text: query.to_string(),
+                        text: format!("I want a shell command to: {}", task),
                     },
                 ],
             },
@@ -93,8 +97,6 @@ fn call_claude(query: &str) -> Result<String, Box<dyn Error>> {
     };
 
     // Make the API call
-    println!("Waiting for Claude's response...");
-
     let response = client
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", api_key)
@@ -114,5 +116,15 @@ fn call_claude(query: &str) -> Result<String, Box<dyn Error>> {
         .collect::<Vec<String>>()
         .join("\n");
 
-    Ok(response_text)
+    // Clean the response - trim whitespace, remove any markdown code blocks if present
+    let clean_response = response_text
+        .trim()
+        .replace("```bash\n", "")
+        .replace("```sh\n", "")
+        .replace("```shell\n", "")
+        .replace("```\n", "")
+        .replace("\n```", "")
+        .replace("```", "");
+
+    Ok(clean_response)
 }

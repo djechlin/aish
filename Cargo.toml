@@ -2,6 +2,9 @@
 name = "aish"
 version = "0.1.0"
 edition = "2021"
+description = "Get shell commands from AI assistant"
+authors = ["Daniel Echlin"]
+license = "MIT"
 
 [dependencies]
 clap = "3.0"
