@@ -20,7 +20,7 @@ fn main() {
     match matches.subcommand() {
         Some(("greet", greet_matches)) => {
             let name = greet_matches.value_of("name").unwrap_or("friend");
-            println!("Hello, {}!", name);
+            println!("Howdy, {}!", name);
         }
         _ => println!("Try using a subcommand like 'greet'"),
     }
