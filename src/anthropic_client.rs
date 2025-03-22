@@ -8,6 +8,7 @@ pub struct AnthropicRequest {
     pub model: String,
     pub max_tokens: u32,
     pub messages: Vec<Message>,
+    pub system: String,
 }
 
 #[derive(Serialize)]
@@ -23,12 +24,21 @@ pub struct ContentItem {
     pub text: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct AnthropicResponse {
     pub content: Vec<ResponseContent>,
+    #[serde(default)]
+    pub error: Option<AnthropicError>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
+pub struct AnthropicError {
+    pub message: String,
+    #[serde(rename = "type")]
+    pub error_type: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct ResponseContent {
     #[serde(rename = "type")]
     pub content_type: String,
@@ -48,10 +58,11 @@ impl AnthropicClient {
         }
     }
 
-    pub fn send_message(&self, model: &str, max_tokens: u32, message_text: &str) -> Result<String, Box<dyn Error>> {
+    pub fn send_message(&self, model: &str, max_tokens: u32, message_text: &str, system_prompt: &str) -> Result<String, Box<dyn Error>> {
         let request = AnthropicRequest {
             model: model.to_string(),
             max_tokens,
+            system: system_prompt.to_string(),
             messages: vec![
                 Message {
                     role: "user".to_string(),
@@ -73,7 +84,18 @@ impl AnthropicClient {
             .json(&request)
             .send()?;
 
+        if !response.status().is_success() {
+            let status_code = response.status().as_u16();
+            let error_text = response.text()?;
+            return Err(format!("[COMMAND_ERROR] API error ({}): {}", status_code, error_text).into());
+        }
+
         let response_json: AnthropicResponse = response.json()?;
+
+        // Check for API-level errors
+        if let Some(error) = response_json.error {
+            return Err(format!("[COMMAND_ERROR] API error: {}", error.message).into());
+        }
 
         let response_text = response_json.content
             .iter()
