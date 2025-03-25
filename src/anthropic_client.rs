@@ -34,8 +34,6 @@ pub struct AnthropicResponse {
 #[derive(Deserialize, Debug)]
 pub struct AnthropicError {
     pub message: String,
-    #[serde(rename = "type")]
-    pub error_type: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
